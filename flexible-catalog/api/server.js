@@ -1,69 +1,73 @@
-const express = require('express');
+import express from "express";
+import mysql from "mysql2/promise";
+import morgan from "morgan";
+import dotenv from "dotenv";
+import { validateFilter } from "./middleware/validateFilter.js";
+
+dotenv.config();
+
 const app = express();
 app.use(express.json());
+app.use(morgan("dev"));
 
-
+// DB connection pool
 const pool = mysql.createPool({
-host: 'db',
-user: 'root',
-password: 'root',
-database: 'catalog'
+  host: process.env.DB_HOST || "db",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASS || "root",
+  database: process.env.DB_NAME || "catalog",
+  waitForConnections: true,
+  connectionLimit: 10,
 });
 
-
-const schemaMap = {
-ram: { col: 'ram_gb', type: 'number' },
-gpu: { col: 'gpu', type: 'string' },
-screen_inches: { col: 'screen_in', type: 'number' },
-battery_mAh: { col: 'battery_mah', type: 'number' }
-};
-
-
-function buildWhere(filters, params) {
-const clauses = [];
-for (const f of filters) {
-const { field, op, value } = f;
-const map = schemaMap[field];
-if (map) {
-const col = map.col;
-if (op === '=' || op === '==') { clauses.push(`${col} = ?`); params.push(value); }
-else if (op === '>=') { clauses.push(`${col} >= ?`); params.push(value); }
-else if (op === '<=') { clauses.push(`${col} <= ?`); params.push(value); }
-else if (op === 'IN') {
-const placeholders = value.map(()=>'?').join(',');
-clauses.push(`${col} IN (${placeholders})`);
-params.push(...value);
-} else {
-clauses.push(`${col} ${op} ?`); params.push(value);
-}
-} else {
-const path = `$.${field}`;
-if (op === '=') { clauses.push(`JSON_UNQUOTE(JSON_EXTRACT(specs, '${path}')) = ?`); params.push(String(value)); }
-else if (op === '>=') { clauses.push(`CAST(JSON_EXTRACT(specs, '${path}') AS DECIMAL) >= ?`); params.push(value); }
-else { clauses.push(`JSON_EXTRACT(specs, '${path}') ${op} ?`); params.push(value); }
-}
-}
-return clauses.length ? ('WHERE ' + clauses.join(' AND ')) : '';
-}
-
-
-app.post('/products/search', async (req, res) => {
-const filters = req.body.filters || [];
-const page = req.body.page || 1;
-const pageSize = req.body.pageSize || 20;
-const params = [];
-const where = buildWhere(filters, params);
-const offset = (page - 1) * pageSize;
-const sql = `SELECT id, name, category, price, specs FROM products ${where} ORDER BY price LIMIT ? OFFSET ?`;
-params.push(pageSize, offset);
-try {
-const [rows] = await pool.query(sql, params);
-res.json({ rows });
-} catch (err) {
-console.error(err);
-res.status(500).json({ error: err.message });
-}
+// Healthcheck endpoint
+app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
 });
 
+// Product search
+app.post("/products/search", validateFilter, async (req, res) => {
+  try {
+    const { filters = [], page = 1, pageSize = 20 } = req.body;
+    const offset = (page - 1) * pageSize;
 
-app.listen(3000, ()=>console.log('Listening on 3000'));
+    // Map filterable fields to DB columns
+    const fieldMap = {
+      ram: "ram_gb",
+      gpu: "gpu",
+      screen_inches: "screen_in",
+      battery: "battery_mah",
+      price: "price",
+    };
+
+    let conditions = [];
+    let values = [];
+
+    for (let f of filters) {
+      if (fieldMap[f.field]) {
+        conditions.push(`${fieldMap[f.field]} ${f.op} ?`);
+        values.push(f.value);
+      } else {
+        // fallback to JSON_EXTRACT for unindexed fields
+        conditions.push(`JSON_UNQUOTE(JSON_EXTRACT(specs, '$.${f.field}')) ${f.op} ?`);
+        values.push(f.value);
+      }
+    }
+
+    const whereClause = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+    const sql = `SELECT * FROM products ${whereClause} LIMIT ? OFFSET ?`;
+
+    console.time("query");
+    const [rows] = await pool.execute(sql, [...values, pageSize, offset]);
+    console.timeEnd("query");
+
+    res.json({ rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log(`API running on port ${process.env.PORT || 3000}`);
+});
