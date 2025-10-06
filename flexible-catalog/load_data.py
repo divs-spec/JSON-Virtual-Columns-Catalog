@@ -1,73 +1,178 @@
+#!/usr/bin/env python3
+import json
 import random
 import csv
 from faker import Faker
-from collections import defaultdict
+from datetime import datetime
+import mysql.connector
+from tqdm import tqdm
+import os
 
 fake = Faker()
 
-NUM_ROWS = 300_000
-CATEGORIES = ["laptop", "desktop", "tablet", "phone"]
+# Product specifications by category
+SPECS_BY_CATEGORY = {
+    'laptop': {
+        'ram': [8, 16, 32, 64],
+        'storage': [256, 512, 1024, 2048],
+        'gpu': ['Intel Iris', 'RTX 3050', 'RTX 3060', 'RTX 4070', 'RTX 4080', 'AMD Radeon'],
+        'screen_size': [13.3, 14.0, 15.6, 16.0, 17.3],
+        'cpu': ['Intel i5', 'Intel i7', 'Intel i9', 'AMD Ryzen 5', 'AMD Ryzen 7', 'AMD Ryzen 9'],
+        'brand': ['Dell', 'HP', 'Lenovo', 'Apple', 'Asus', 'MSI', 'Acer'],
+        'price_range': (500, 3000)
+    },
+    'phone': {
+        'ram': [4, 6, 8, 12, 16],
+        'storage': [64, 128, 256, 512, 1024],
+        'screen_size': [5.5, 6.1, 6.4, 6.7, 6.9],
+        'battery_mah': [3000, 4000, 4500, 5000, 6000],
+        'brand': ['Apple', 'Samsung', 'Google', 'OnePlus', 'Xiaomi', 'Oppo'],
+        'price_range': (200, 1500)
+    },
+    'tablet': {
+        'ram': [4, 6, 8, 12, 16],
+        'storage': [64, 128, 256, 512],
+        'screen_size': [8.0, 10.1, 11.0, 12.9],
+        'battery_mah': [5000, 7000, 8000, 10000],
+        'brand': ['Apple', 'Samsung', 'Microsoft', 'Amazon', 'Lenovo'],
+        'price_range': (150, 1200)
+    },
+    'desktop': {
+        'ram': [8, 16, 32, 64, 128],
+        'storage': [512, 1024, 2048, 4096],
+        'gpu': ['RTX 3060', 'RTX 3070', 'RTX 4070', 'RTX 4080', 'RTX 4090', 'AMD RX 7900'],
+        'cpu': ['Intel i5', 'Intel i7', 'Intel i9', 'AMD Ryzen 5', 'AMD Ryzen 7', 'AMD Ryzen 9'],
+        'brand': ['Dell', 'HP', 'Lenovo', 'Custom Build', 'Alienware'],
+        'price_range': (600, 5000)
+    }
+}
 
-# Specs ranges
-RAM_OPTIONS = [4, 8, 16, 32, 64]
-GPU_OPTIONS = ["RTX 3050", "RTX 3060", "RTX 4070", "RTX 4090", "Integrated"]
-SCREEN_OPTIONS = [13.3, 14.0, 15.6, 17.3, 27.0]
-BATTERY_OPTIONS = [4000, 5000, 6000, 7000, 8000]
-
-# Output files
-SQL_FILE = "products_inserts.sql"
-CSV_FILE = "products.csv"
-
-def gen_row(i):
-    category = random.choice(CATEGORIES)
-    name = f"{category}-{i}"
-    price = round(random.uniform(200, 3000), 2)
-    ram = random.choice(RAM_OPTIONS)
-    gpu = random.choice(GPU_OPTIONS)
-    screen = random.choice(SCREEN_OPTIONS)
-    battery = random.choice(BATTERY_OPTIONS)
-
-    specs = {
-        "ram": ram,
-        "gpu": gpu,
-        "screen_inches": screen,
-        "battery": battery
+def generate_product(product_id, category):
+    """Generate a single product with specifications"""
+    specs_template = SPECS_BY_CATEGORY.get(category, SPECS_BY_CATEGORY['laptop'])
+    
+    specs = {}
+    for key, values in specs_template.items():
+        if key != 'price_range':
+            if isinstance(values, list):
+                specs[key] = random.choice(values)
+    
+    name = f"{specs.get('brand', 'Generic')}-{category}-{product_id}"
+    price_min, price_max = specs_template['price_range']
+    price = round(random.uniform(price_min, price_max), 2)
+    
+    return {
+        'name': name,
+        'category': category,
+        'price': price,
+        'specs': json.dumps(specs)
     }
 
-    return (name, category, price, specs)
+def generate_data(num_products=300000):
+    """Generate product data"""
+    print(f"Generating {num_products} products...")
+    
+    categories = list(SPECS_BY_CATEGORY.keys())
+    products = []
+    
+    for i in tqdm(range(1, num_products + 1)):
+        category = random.choice(categories)
+        product = generate_product(i, category)
+        products.append(product)
+    
+    return products
 
-def generate_sql(rows):
-    with open(SQL_FILE, "w") as f:
+def save_to_sql(products, filename='products_inserts.sql'):
+    """Save products as SQL insert statements"""
+    print(f"Saving to {filename}...")
+    
+    with open(filename, 'w') as f:
         f.write("USE catalog;\n")
-        f.write("INSERT INTO products (name, category, price, specs) VALUES\n")
-        values = []
-        for (name, category, price, specs) in rows:
-            values.append(f"(\"{name}\", \"{category}\", {price}, '{specs}')")
-        f.write(",\n".join(values) + ";\n")
-    print(f"[OK] SQL insert script written to {SQL_FILE}")
+        f.write("SET foreign_key_checks = 0;\n")
+        f.write("TRUNCATE TABLE products;\n")
+        f.write("SET foreign_key_checks = 1;\n\n")
+        
+        # Batch inserts for better performance
+        batch_size = 1000
+        for i in range(0, len(products), batch_size):
+            batch = products[i:i+batch_size]
+            f.write("INSERT INTO products (name, category, price, specs) VALUES\n")
+            
+            values = []
+            for product in batch:
+                specs_escaped = product['specs'].replace("'", "\\'")
+                values.append(f"('{product['name']}', '{product['category']}', {product['price']}, '{specs_escaped}')")
+            
+            f.write(",\n".join(values))
+            f.write(";\n\n")
+    
+    print(f"SQL file saved: {filename}")
 
-def generate_csv(rows):
-    with open(CSV_FILE, "w", newline="") as f:
+def save_to_csv(products, filename='products.csv'):
+    """Save products as CSV for bulk loading"""
+    print(f"Saving to {filename}...")
+    
+    with open(filename, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["name", "category", "price", "specs"])  # header
-        for (name, category, price, specs) in rows:
-            writer.writerow([name, category, price, str(specs)])
-    print(f"[OK] CSV file written to {CSV_FILE}")
+        writer.writerow(['name', 'category', 'price', 'specs'])
+        
+        for product in products:
+            writer.writerow([
+                product['name'],
+                product['category'],
+                product['price'],
+                product['specs']
+            ])
+    
+    print(f"CSV file saved: {filename}")
 
-def log_stats(rows):
-    stats = defaultdict(list)
-    for _, cat, _, specs in rows:
-        stats[cat].append(specs["ram"])
-    print("=== Stats ===")
-    for cat, rams in stats.items():
-        avg_ram = sum(rams) / len(rams)
-        print(f"{cat}: {len(rams)} rows, avg RAM = {avg_ram:.1f} GB")
+def load_to_db(products):
+    """Load products directly to database"""
+    try:
+        conn = mysql.connector.connect(
+            host=os.getenv('DB_HOST', 'localhost'),
+            port=os.getenv('DB_PORT', 3306),
+            user=os.getenv('DB_USER', 'root'),
+            password=os.getenv('DB_PASS', 'root'),
+            database=os.getenv('DB_NAME', 'catalog')
+        )
+        cursor = conn.cursor()
+        
+        print("Loading to database...")
+        cursor.execute("TRUNCATE TABLE products")
+        
+        insert_query = """
+        INSERT INTO products (name, category, price, specs) 
+        VALUES (%s, %s, %s, %s)
+        """
+        
+        batch_size = 5000
+        for i in tqdm(range(0, len(products), batch_size)):
+            batch = products[i:i+batch_size]
+            data = [(p['name'], p['category'], p['price'], p['specs']) for p in batch]
+            cursor.executemany(insert_query, data)
+            conn.commit()
+        
+        print("Data loaded successfully!")
+        cursor.close()
+        conn.close()
+        
+    except mysql.connector.Error as e:
+        print(f"Database error: {e}")
+        print("Falling back to SQL/CSV file generation...")
 
 if __name__ == "__main__":
-    rows = [gen_row(i) for i in range(1, NUM_ROWS + 1)]
-    generate_sql(rows)
-    generate_csv(rows)
-    log_stats(rows)
-
-    print(\"\\nImport CSV with:\")
-    print(f\"LOAD DATA INFILE '/path/to/{CSV_FILE}' INTO TABLE products \\\")\n    FIELDS TERMINATED BY ',' ENCLOSED BY '\"' \\\n    LINES TERMINATED BY '\\n' IGNORE 1 ROWS \\\n    (name, category, price, specs);\")\n```\n\n---\n\n## 🚀 How to use\n\n1. Generate the data:\n   ```bash\n   python3 load_data.py\n   ```\n   → produces `products_inserts.sql` and `products.csv`\n\n2. **Fast import using CSV** (recommended):\n   ```sql\n   LOAD DATA INFILE '/absolute/path/products.csv'\n   INTO TABLE products\n   FIELDS TERMINATED BY ',' ENCLOSED BY '\"'\n   LINES TERMINATED BY '\\n'\n   IGNORE 1 ROWS\n   (name, category, price, specs);\n   ```\n\n   ⚠️ Make sure MySQL has permissions for the file (check `secure_file_priv`).\n\n3. **Slower SQL insert method**:\n   ```bash\n   mysql -h127.0.0.1 -P3306 -u root -proot < products_inserts.sql\n   ```\n\n---\n\n✅ This script gives you both worlds: **fast CSV import** for huge datasets and **SQL inserts** for portability. Plus, you get summary stats for quick sanity checks.\n\n---\n\nWant me to also add a **ready-made SQL script for `LOAD DATA INFILE`** (so you don’t have to type it manually) that works after `load_data.py` runs?
+    # Generate data
+    products = generate_data(300000)
+    
+    # Save to files
+    save_to_sql(products)
+    save_to_csv(products)
+    
+    # Try direct DB load
+    # load_to_db(products)
+    
+    print("\n✅ Data generation complete!")
+    print("Next steps:")
+    print("1. Load SQL: mysql -h127.0.0.1 -u root -p < products_inserts.sql")
+    print("2. Or load CSV: LOAD DATA INFILE 'products.csv' INTO TABLE products...")
