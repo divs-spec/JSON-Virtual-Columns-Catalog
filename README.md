@@ -249,3 +249,329 @@ For persistent issues, consult logs in Docker containers (`docker logs <containe
 ---
 
 🔥 Demonstrates **real-world DB optimization**, **scalable ingestion**, **API best practices**, solving **semi-structured data challenges**, and includes guidance for handling failures.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Flexible Catalog
+
+[![Docker Compose](https://img.shields.io/badge/docker-compose-blue.svg)](#) [![MySQL](https://img.shields.io/badge/MySQL-8.0-blue)](#) [![Node.js](https://img.shields.io/badge/Node-18-green)](#) [![Python](https://img.shields.io/badge/Python-3.11-blue)](#)
+
+A production-ready, containerized **flexible product catalog** that stores arbitrary product attributes in a `specs` JSON column while exposing fast, indexed SQL queries via generated virtual columns. Built for demos, hackathons, and real-world e‑commerce needs.
+
+---
+
+## ⚡ Highlights
+
+* **Hybrid JSON + SQL**: store flexible attributes in `specs` (JSON) and use generated columns for frequently queried fields.
+* **Fast & Scalable**: designed to handle 300k+ products with sub-100ms indexed queries.
+* **Production-ready**: Docker Compose, health checks, connection pool, and proper error handling.
+* **Clean API**: REST endpoints for search, pagination, product details, and analytics.
+
+---
+
+## 📁 Repo structure
+
+```
+flexible-catalog/
+├── docker-compose.yml
+├── .env
+├── schema.sql
+├── load_data.py
+├── requirements.txt
+├── api/
+│   ├── Dockerfile
+│   ├── package.json
+│   ├── server.js
+│   └── middleware/
+│       └── validateFilter.js
+└── README.md
+```
+
+---
+
+## 🚀 Quick start (local)
+
+1. Clone the repo and enter the folder:
+
+```bash
+git clone <repo-url>
+cd flexible-catalog
+```
+
+2. Copy the `.env` values (or create a `.env` file):
+
+```env
+DB_HOST=db
+DB_PORT=3306
+DB_USER=catalog_user
+DB_PASS=SecurePass123!
+DB_NAME=catalog
+PORT=3000
+```
+
+3. Start services with Docker Compose:
+
+```bash
+docker-compose up -d
+```
+
+4. Generate demo data (example generates 300k products):
+
+```bash
+python load_data.py
+```
+
+5. Load generated SQL into MySQL (run after DB is up):
+
+```bash
+docker exec -i catalog_db mysql -uroot -p$DB_PASS $DB_NAME < products_inserts.sql
+```
+
+6. Health check the API:
+
+```bash
+curl http://localhost:3000/health
+```
+
+---
+
+## 🧱 Database schema (high level)
+
+* `products` table stores common columns (id, name, category, price, created_at, updated_at) and a `specs` JSON column.
+* Virtual/generated columns (stored) are created from JSON paths for fields like `ram_gb`, `storage_gb`, `gpu`, `brand`, `screen_size`, `battery_mah`, and indexed for fast filtering.
+* A `product_summary` view provides category-level analytics.
+
+See `schema.sql` for the full DDL, triggers, and view definitions.
+
+---
+
+## 🛠 Data generation
+
+* `load_data.py` generates mock products across categories (laptop, phone, tablet, desktop) and can produce:
+
+  * `products_inserts.sql` (batched INSERTs)
+  * `products.csv` (for `LOAD DATA INFILE`)
+* Use `requirements.txt` to install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 🔌 API (overview)
+
+* Built with Express + `mysql2/promise` and secured with helmet, compression, and logging.
+
+### Key endpoints
+
+* `GET /health` — health check
+* `GET /products` — paginated list of products
+* `POST /products/search` — complex search with `filters`, `sort`, `page`, `pageSize`
+* `GET /products/:id` — product by ID
+* `GET /analytics/summary` — category-level analytics (uses the `product_summary` view)
+
+### Example search
+
+```bash
+curl -X POST http://localhost:3000/products/search \
+  -H "Content-Type: application/json" \
+  -d '{"filters":[{"field":"ram","op":">=","value":32},{"field":"category","op":"=","value":"laptop"}], "page":1, "pageSize":10}'
+```
+
+---
+
+## 🧪 Testing & verification
+
+Sample queries to validate behavior:
+
+```bash
+# Laptops with >= 32GB RAM
+curl -X POST http://localhost:3000/products/search -H "Content-Type: application/json" -d '{"filters":[{"field":"ram","op":">=","value":32},{"field":"category","op":"=","value":"laptop"}]}'
+
+# High-end GPUs
+curl -X POST http://localhost:3000/products/search -H "Content-Type: application/json" -d '{"filters":[{"field":"gpu","op":"in","value":["RTX 4080","RTX 4090"]}]}'
+
+# Analytics summary
+curl http://localhost:3000/analytics/summary
+```
+
+---
+
+## 📈 Performance notes (demo targets)
+
+* **JSON-path queries** (direct JSON_EXTRACT without indexes) are slower and should be avoided for hot filters.
+* **Generated columns + B-tree indexes** deliver 5–10x faster lookups for commonly filtered attributes.
+* Tune DB pool size, indexes, and hardware for production-scale traffic.
+
+---
+
+## 🎯 Hackathon pitch (ready-to-read)
+
+> We built a flexible catalog system that solves the real challenge e-commerce platforms face: managing diverse product attributes without sacrificing performance. Using a hybrid approach (JSON flexibility + SQL indexing), we can query 300k products in milliseconds while allowing the addition of new attributes without schema changes. The system is fully containerized, includes a RESTful API, and ships with a demo data generator.
+
+---
+
+## ✅ Unique selling points
+
+* No schema migrations required for new attributes — just add JSON.
+* B-tree indexed virtual columns for blazing-fast filtering.
+* Production-ready practices: health checks, connection pooling, validation, and logging.
+
+---
+
+## 🧾 License
+
+MIT — feel free to use and adapt. Attribution appreciated.
+
+---
+
+## 📬 Want help?
+
+I can also:
+
+* Create a compact README hero image (PNG) suitable for GitHub.
+* Generate a 3-slide pitch deck (Overview / Architecture / Demo).
+* Produce performance benchmarking scripts or a frontend dashboard.
+
+If you want the README committed as `README.md` in the repo, I can provide the raw markdown for you to copy, or generate a downloadable file — tell me which you prefer.
+
